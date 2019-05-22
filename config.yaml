@@ -1,0 +1,60 @@
+---
+# Path to a PKCS#11 .so file that will be used to access the underlying
+# PIV card. This will be used at runtime to ask for the Certificate,
+# and to sign a SHA256 sized challange hash.
+pkcs11path: "/usr/lib/x86_64-linux-gnu/pkcs11/opensc-pkcs11.so"
+
+# Token Label as output by `pkcs11-tool`. This is ignored if there's only one
+# token, for now. This is only useful if you have multiple cards plugged into
+# your machine.
+tokenlabel: ""
+
+# Path to a file containing all known x.509 CA root authorities as well as
+# any intermediaries.
+capath: "/etc/pam-piv/ca.pem"
+
+# Check to see if the Certificate has the Microsoft Smartcard Login EKU
+keyusagesmartcardlogin: true
+
+mapping:
+    # What attribute to take off the x.509 Certificate to map to a local user.
+    # 
+    # Valid values for this field are:
+    #
+    #   - upn
+    #   - email
+    #
+    attribute: upn
+
+    # File to map the attribute to a local username.
+    file: "/etc/pam-piv/map"
+
+# Information regarding what level of assurance you're willing to accept for
+# a valid login token. If a Certificate has more than one Policy that is known
+# to the underlying "pault.ag/go/piv".Policy implementation, it will ensure
+# that each Policy in question is above the requirements below. This means
+# even if you're a dodMediumHardware2048, a fbcaBasic will not meet a
+# `minimumassurance` of `medium`.
+policy:
+    # The mimumum LOA you're willing to accept.
+    #
+    # This does not take into account if this is a NPE or a Hardware backed
+    # token. The knobs below will control that.
+    #
+    # Valid values for this field are:
+    #
+    #   - unknown
+    #   - rudimentary
+    #   - basic
+    #   - medium
+    #   - high
+    #
+    # You almost never want `high`, PIV tokens are `medium`, and that's an
+    # entirely sane default to keep.
+    minimumassurance: medium
+
+    # This flag indicates if the FIPS 201 token is hardware token or a soft-cert
+    # that may have been loaded onto a hardware token. A value of `true` means
+    # that only tokens issued from the agency in question (and not soft-certs
+    # that get loaded onto things like Yubikeys) are allowed to login.
+    hardware: true

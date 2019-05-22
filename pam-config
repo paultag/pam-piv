@@ -1,0 +1,6 @@
+Name: PIV authentication
+Default: yes
+Priority: 512
+Auth-Type: Primary
+Auth:
+    [success=end default=ignore] pam_piv.so /etc/pam-piv/config.yaml
