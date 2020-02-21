@@ -23,9 +23,11 @@ package pkcs11
 import (
 	"crypto"
 	"crypto/rsa"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math/big"
+	"strings"
 
 	"pault.ag/go/piv"
 
@@ -44,9 +46,9 @@ var hashOIDs = map[crypto.Hash][]byte{
 	crypto.SHA512: {0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40},
 }
 
-// HSM Configuration object, to define which PKCS#11 .so module to use,
-// Certificate and Private Key strings, a PIN (if needed), and the label
-// of the token.
+// Config is the HSM Configuration object, setting which PKCS#11 module to use,
+// Certificate and Private Key strings, a PIN (if needed), and the label of the
+// token.
 type Config struct {
 	// Full path to the PKCS#11 object on the filesystem. The exact value
 	// of this depends on the host, but should usually end in a .so
@@ -65,8 +67,9 @@ type Config struct {
 	TokenLabel string
 }
 
-// Create a pkcs11.Attribute array containing constraints that should
-// uniquely identify the PKCS#11 Certificate we're interested in
+// GetCertificateTemplate creates a pkcs11.Attribute array containing
+// constraints that should uniquely identify the PKCS#11 Certificate we're
+// interested in
 func (c Config) GetCertificateTemplate() []*pkcs11.Attribute {
 	return []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_LABEL, c.CertificateLabel),
@@ -74,8 +77,9 @@ func (c Config) GetCertificateTemplate() []*pkcs11.Attribute {
 	}
 }
 
-// Create a pkcs11.Attribute array containing constraints that should
-// uniquely identify the PKCS#11 private key we're interested in
+// GetPrivateKeyTemplate returns a pkcs11.Attribute array containing
+// constraints that should uniquely identify the PKCS#11 private key we're
+// interested in
 func (c Config) GetPrivateKeyTemplate() []*pkcs11.Attribute {
 	return []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_LABEL, c.PrivateKeyLabel),
@@ -87,11 +91,11 @@ func (c Config) GetPrivateKeyTemplate() []*pkcs11.Attribute {
 // we've got in front of us. This is used to filter out tokens during
 // the setup phase.
 func (c Config) slotMatchesCriteria(tokenInfo pkcs11.TokenInfo) bool {
-	return tokenInfo.Label == c.TokenLabel
+	return strings.TrimRight(tokenInfo.Label, "\x00") == c.TokenLabel
 }
 
-// Given a pkcs11.Ctx, and a list of slots, figure out which slot is the
-// slot we're interested in, returning an error if there's nothing we
+// SelectSlot takes a pkcs11.Ctx and a list of slots, figures out which slot is
+// the slot we're interested in, returning an error if there's nothing we
 // should be using.
 func (c Config) SelectSlot(context *pkcs11.Ctx, slots []uint) (uint, error) {
 	/* If there's no label matching, and there's only one slot, return
@@ -115,7 +119,7 @@ func (c Config) SelectSlot(context *pkcs11.Ctx, slots []uint) (uint, error) {
 	return 0, fmt.Errorf("No matching slot found")
 }
 
-// Method to log out of the Token, and close any open sessions we might
+// Close logs out of the Token, and closes any open sessions we might
 // have open. This method ought to be defer'd after creating a new
 // hsm.Store.
 func (s Store) Close() error {
@@ -141,7 +145,7 @@ func (s Store) Close() error {
 	return nil
 }
 
-// Create a new hsm.Store defined by the hsm.Config. If no slot can be
+// New creates a new hsm.Store defined by the hsm.Config. If no slot can be
 // found, or the underlying infrastructure throws a problem at us, we will
 // return an error.
 func New(config Config) (*Store, error) {
@@ -181,6 +185,7 @@ func New(config Config) (*Store, error) {
 	return &cStore, err
 }
 
+// Login unlocks a smartcard with the provided PIN.
 func (s Store) Login(pin string) error {
 	err := s.context.Login(*s.session, pkcs11.CKU_USER, pin)
 	if err == nil {
@@ -189,8 +194,8 @@ func (s Store) Login(pin string) error {
 	return err
 }
 
-// internal hsm.Store encaupsulating state. This implements the store.Store
-// interface, as well as crypto.Signer, and crypto.Decryptor.
+// Store is the internal hsm.Store encaupsulating state. This implements the
+// store.Store interface, as well as crypto.Signer, and crypto.Decryptor.
 type Store struct {
 	config *Config
 
@@ -238,7 +243,7 @@ func (s Store) getObjectHandle(template []*pkcs11.Attribute) (*pkcs11.ObjectHand
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("pkcs11: the token has no such object")
 	} else if len(candidates) != 1 {
-		return nil, fmt.Errorf("The query resulted in too many objects.")
+		return nil, fmt.Errorf("The query resulted in too many objects")
 	}
 	return &candidates[0], nil
 }
@@ -264,14 +269,14 @@ func (s Store) getAttribute(locate, attributes []*pkcs11.Attribute) (*pkcs11.Att
 	}
 
 	if len(attr) != 1 {
-		return nil, fmt.Errorf("The query resulted in too many attributes.")
+		return nil, fmt.Errorf("The query resulted in too many attributes")
 	}
 
 	return attr[0], nil
 }
 
-// Query the underlying HSM Store for the x509 Certificate we're interested in,
-// and return a Go x509.Certificate.
+// LoadCertificate queries the underlying HSM Store for the x509 Certificate
+// we're interested in, and returns a Go x509.Certificate.
 func (s Store) LoadCertificate() (*piv.Certificate, error) {
 	certAttribute, err := s.getAttribute(
 		s.config.GetCertificateTemplate(),
@@ -309,8 +314,9 @@ func createPubkeyFromAttributes(attributes []*pkcs11.Attribute) (crypto.PublicKe
 	return &key, nil
 }
 
-// Return the cached PublicKey, because uh, the interface we're implementing
-// doesn't want us to return errors, so, we'll force errors during startup.
+// Public returns the cached PublicKey, because the interface we're
+// implementing doesn't want us to return errors, so, we'll force errors
+// during startup.
 //
 // This has a downside of not being able to read the PublicKey if it changes
 // during our session (womp), but maybe that's not a problem? Who can know.
@@ -319,8 +325,8 @@ func (s Store) Public() crypto.PublicKey {
 	return s.PublicKey
 }
 
-// implement crypto.Signer. This will have the HSM sign the hash given, ignoring
-// the entropy source `rand` on chip, and return the signature blob.
+// Sign implements crypto.Signer. This will have the HSM sign the hash given,
+// ignoring the entropy source `rand` on chip, and return the signature blob.
 func (s Store) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	hash := opts.HashFunc()
 	if len(digest) != hash.Size() {
@@ -348,9 +354,9 @@ func (s Store) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]by
 	return s.context.Sign(*s.session, digest)
 }
 
-// implement crypto.Decryptor. This will have the HSM Decrypt the encrypted
-// data given, ignoring `rand`, and using on chip entropy sources. This will
-// returned the data in cleartext.
+// Decrypt implements crypto.Decryptor. This will have the HSM Decrypt the
+// encrypted data given, ignoring `rand`, and using on chip entropy sources.
+// This will return the data in cleartext.
 func (s Store) Decrypt(rand io.Reader, msg []byte, opts crypto.DecrypterOpts) ([]byte, error) {
 	privateKey, err := s.getObjectHandle(s.config.GetPrivateKeyTemplate())
 	if err != nil {
@@ -369,6 +375,22 @@ func (s Store) Decrypt(rand io.Reader, msg []byte, opts crypto.DecrypterOpts) ([
 	}
 
 	return s.context.Decrypt(*s.session, msg)
+}
+
+// TLSCertificate queries the underlying HSM Store for the x509 Certificate
+// we're interested in, and returns a tls.Certificate containing both the
+// public and private portions.
+func (s Store) TLSCertificate() (*tls.Certificate, error) {
+	cert, err := s.LoadCertificate()
+	if err != nil {
+		return nil, err
+	}
+	tlsCertificate := tls.Certificate{
+		Certificate: [][]byte{cert.Raw},
+		PrivateKey:  s,
+		Leaf:        cert.Certificate,
+	}
+	return &tlsCertificate, nil
 }
 
 // vim: foldmethod=marker
